@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 import openpyxl
 import datetime
 import os
+import concurrent.futures
 
 app = Flask(__name__)
 UPLOAD_FOLDER = 'documents'  # e.g., 'uploads' or any directory path
@@ -32,15 +33,16 @@ def search(upc_code, div_class):
         # Parse the response content with BeautifulSoup
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # Find the div with the specified class
-        div = soup.find('div', class_=div_class)
-        if div:
-            # Find the h3 tag inside the div
-            h3 = div.find('h3')
-            if h3:
-                return h3.get_text(strip=True)
-            else:
-                return "NONE"
+        # Find all divs with the specified class
+        divs = soup.find_all('div', class_=div_class)
+        if divs:
+            # Find the h3 tag inside each div and return the one with the most characters
+            longest_text = "NONE"
+            for div in divs:
+                h3 = div.find('h3')
+                if h3 and len(h3.get_text(strip=True)) > len(longest_text):
+                    longest_text = h3.get_text(strip=True)
+            return longest_text
         else:
             return "NONE"
 
@@ -56,7 +58,6 @@ def get_inventory():
         cur.execute("SELECT products.id, products.name, products.barcode, quantities.quantity FROM products INNER JOIN quantities ON products.id = quantities.product_id")
         inventory = cur.fetchall()
     
-    logging.info("Inventory retrieved successfully")
     return jsonify(inventory)
 
 @app.route('/check_barcode', methods=['POST'])
@@ -161,6 +162,17 @@ def make_document():
     logging.info(f"Sending file: {file}")
     return response
 
+@app.route('/find', methods=['GET', 'POST'])
+def find():
+    data = request.get_json()
+    input_name = data.get("name")
+    logging.info(f"Received request to find most similar name for: {input_name}")
+    
+    most_similar_name = find_most_similar_name(input_name)
+    
+    logging.info(f"Most similar name found: {most_similar_name}")
+    return jsonify({"price": most_similar_name})
+
 def get_items():
     logging.info("Getting inventory")
     try:
@@ -181,8 +193,18 @@ def writetocell(items):
     for index, item in enumerate(items):
         name = item[1]
         quantity = item[2]
+        price = find_most_similar_name(name)  # Get the price using find_most_similar_name
+        logging.info(f"Retrieving price for {name}")
+        new_price=get_product_price(price[0])
+        id=price[2]
+        price=price[1]
+        if price != new_price and new_price != "0":
+            logging.info(f"Price for {name} has changed from {price} to {new_price}")
+            setnewprice(id, new_price)
+            price=new_price
         sheet['B'+str(index+5)] = name
         sheet['D'+str(index+5)] = quantity
+        sheet['E'+str(index+5)] = price  # Add the price to cell E
         sheet['F'+str(index+5)] = '=D'+str(index+5)+'*E'+str(index+5)
         #save last index
         last=index+5
@@ -197,6 +219,63 @@ def writetocell(items):
     file="documents/The Wine Bar - Varetelling - "+str(datetime.datetime.now().strftime("%B"))+" "+str(datetime.datetime.now().year)+".xlsx"
     wb.save(file)
     wb.close()
+
+def setnewprice(id, new_price):
+    # Connect to the database
+    conn = sqlite3.connect('data.db')
+    cursor = conn.cursor()
+    
+    # Update query
+    # escape single quotes in the name
+    query = "UPDATE products SET price = ? WHERE id = ?"
+    cursor.execute(query, (new_price, id))
+    # Commit the changes
+    conn.commit()
+
+    # Close the connection
+    conn.close()
+
+def get_product_price(name):
+    url = f"https://www.vinmonopolet.no/vmpws/v2/vmp/search?fields=FULL&pageSize=24&searchType=product&currentPage=0&q={name}"
+    response = requests.get(url)
+    data = response.json()
+    # return only the name and price of the first product
+    if 'productSearchResult' not in data:
+        return "0"
+    product = data['productSearchResult']['products'][0]
+    return product['price']['value']
+
+def find_most_similar_name(input_name):
+    # Connect to the database
+    conn = sqlite3.connect('data.db')
+    cursor = conn.cursor()
+    
+    # Fetch all names and prices from the products table
+    cursor.execute("SELECT name, price, id FROM products")
+    products = cursor.fetchall()
+    
+    input_parts = input_name.split()
+    
+    def score_product(product):
+        name, price, id = product
+        name_parts = name.split()
+        common_parts = set(input_parts) & set(name_parts)
+        return len(common_parts)
+    
+    # Use multithreading to score all products
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        futures = {executor.submit(score_product, product): product for product in products}
+        scored_products = [(futures[future], future.result()) for future in concurrent.futures.as_completed(futures)]
+    
+    # Sort by the number of common parts
+    scored_products.sort(key=lambda x: x[1], reverse=True)
+    
+    # Filter out products with zero common parts
+    most_similar_products = [(name, price, id ) for (name, price, id), score in scored_products if score > 0]
+    
+    # Close the connection
+    conn.close()
+    return most_similar_products[0] if most_similar_products else "0"
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5000)
