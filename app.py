@@ -245,10 +245,10 @@ def get_product_price(name):
     response = requests.get(url)
     data = response.json()
     # return only the name and price of the first product
-    if 'productSearchResult' not in data and len(data['productSearchResult']['products'][0])<0:
+    if data.get('productSearchResult', {}).get('products'):
+        product = data['productSearchResult']['products'][0]
+    else:
         return "0"
-    print(data['productSearchResult']['products'][0])
-    product = data['productSearchResult']['products'][0]
     return product['price']['value']
 
 def find_most_similar_name(input_name):
