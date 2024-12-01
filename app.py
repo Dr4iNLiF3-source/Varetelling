@@ -187,36 +187,41 @@ def get_items():
 def writetocell(items):
     wb = openpyxl.load_workbook('dummy.xlsx')
     sheet = wb.active
-    #change active page to Vin
+    # Change active page to Vin
     sheet = wb['Vin']
-    last=0
-    for index, item in enumerate(items):
+    last = 0
+
+    def process_item(index, item):
         name = item[1]
         quantity = item[2]
         price = find_most_similar_name(name)  # Get the price using find_most_similar_name
         logging.info(f"Retrieving price for {name}")
-        new_price=get_product_price(price[0])
-        id=price[2]
-        price=price[1]
+        new_price = get_product_price(price[0])
+        id = price[2]
+        price = price[1]
         if price != new_price and new_price != "0":
             logging.info(f"Price for {name} has changed from {price} to {new_price}")
             setnewprice(id, new_price)
-            price=new_price
-        sheet['B'+str(index+5)] = name
-        sheet['D'+str(index+5)] = quantity
-        sheet['E'+str(index+5)] = price  # Add the price to cell E
-        sheet['F'+str(index+5)] = '=D'+str(index+5)+'*E'+str(index+5)
-        #save last index
-        last=index+5
+            price = new_price
+        sheet['B' + str(index + 5)] = name
+        sheet['D' + str(index + 5)] = quantity
+        sheet['E' + str(index + 5)] = price  # Add the price to cell E
+        sheet['F' + str(index + 5)] = '=D' + str(index + 5) + '*E' + str(index + 5)
+        return index + 5
 
-    #make Sum row bold
-    sheet['B'+str(last+3)].font = openpyxl.styles.Font(bold=True)
-    sheet['B'+str(last+3)] = 'SUM'
-    sheet['D'+str(last+3)] = '=SUM(D5:D'+str(last)+')'
-    sheet['E'+str(last+3)] = '=SUM(E5:E'+str(last)+')'
-    sheet['F'+str(last+3)] = '=SUM(F5:F'+str(last)+')'
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        futures = [executor.submit(process_item, index, item) for index, item in enumerate(items)]
+        for future in concurrent.futures.as_completed(futures):
+            last = future.result()
+
+    # Make Sum row bold
+    sheet['B' + str(last + 3)].font = openpyxl.styles.Font(bold=True)
+    sheet['B' + str(last + 3)] = 'SUM'
+    sheet['D' + str(last + 3)] = '=SUM(D5:D' + str(last) + ')'
+    sheet['E' + str(last + 3)] = '=SUM(E5:E' + str(last) + ')'
+    sheet['F' + str(last + 3)] = '=SUM(F5:F' + str(last) + ')'
     logging.info("Saving inventory to Excel")
-    file="documents/The Wine Bar - Varetelling - "+str(datetime.datetime.now().strftime("%B"))+" "+str(datetime.datetime.now().year)+".xlsx"
+    file = "documents/The Wine Bar - Varetelling - " + str(datetime.datetime.now().strftime("%B")) + " " + str(datetime.datetime.now().year) + ".xlsx"
     wb.save(file)
     wb.close()
 
@@ -242,6 +247,7 @@ def get_product_price(name):
     # return only the name and price of the first product
     if 'productSearchResult' not in data and len(data['productSearchResult']['products'][0])<0:
         return "0"
+    print(data['productSearchResult']['products'][0])
     product = data['productSearchResult']['products'][0]
     return product['price']['value']
 
