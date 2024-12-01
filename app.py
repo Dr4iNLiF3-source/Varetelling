@@ -240,7 +240,7 @@ def get_product_price(name):
     response = requests.get(url)
     data = response.json()
     # return only the name and price of the first product
-    if 'productSearchResult' not in data:
+    if 'productSearchResult' not in data and len(data['productSearchResult']['products'][0])<0:
         return "0"
     product = data['productSearchResult']['products'][0]
     return product['price']['value']
